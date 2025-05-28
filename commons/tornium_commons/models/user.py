@@ -105,7 +105,11 @@ class User(BaseModel):
 
     def generate_otp_secret(self):
         self.otp_secret = base64.b32encode(os.urandom(10)).decode("utf-8")
-        self.save()
+        
+    def save_otp_secret(self):
+        if self.otp_secret == "" or self.security != 1:  # nosec B105
+            raise Exception("Illegal OTP secret or security mode")
+        self.otp_secret = self.otp_secret.strip().upper()
 
     def generate_otp_url(self):
         if self.otp_secret == "" or self.security != 1:  # nosec B105

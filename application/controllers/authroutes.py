@@ -20,6 +20,8 @@ import json
 import secrets
 import time
 import typing
+import base64
+import os
 from functools import wraps
 
 import requests
@@ -676,9 +678,48 @@ def totp_secret(*args, **kwargs):
 @fresh_login_required
 @token_required(setnx=False)
 def totp_secret_regen(*args, **kwargs):
-    current_user.generate_otp_secret()
+    secret = base64.b32encode(os.urandom(10)).decode("utf-8")
+    
+    try:
+        rds().set(f"tornium:otp_secret:{current_user.tid}", secret, ex=3600)
+    except Exception as e:
+        current_app.logger.error(f"Failed to save OTP secret for user {current_user.tid}: {e}")
+        return make_exception_response("0000", details={"message": "Failed to save OTP secret"})
+      
+    return make_exception_response("0001", details={"secret": secret, "url": current_user.generate_otp_url(secret)})
 
-    return make_exception_response("0001")
+
+@mod.route("/totp/verify", methods=["POST"])
+@fresh_login_required
+@token_required(setnx=False)
+def totp_verify(*args, **kwargs):
+    # Verify the TOTP code provided by the user
+    data = json.loads(request.get_data().decode("utf-8"))
+    totp_code = data.get("totp_code")
+    if not totp_code:
+        return make_exception_response("0000", details={"message": "TOTP code is required"})
+    
+    #check on redis first
+    secret = rds().get(f"tornium:otp_secret:{current_user.tid}")
+    if secret is None:
+        return make_exception_response("0000", details={"message": "OTP secret not found"})
+    
+    secret = secret.decode("utf-8") if isinstance(secret, bytes) else secret
+    
+    try:
+        is_valid = utils.totp.totp(secret)[0] == totp_code or utils.totp.totp(secret)[1] == totp_code
+    except Exception as e:
+        current_app.logger.error(f"Failed to verify TOTP code for user {current_user.tid}: {e}")
+        return make_exception_response("0000", details={"message": "Failed to verify TOTP code"})
+
+    if is_valid:
+        current_user.security = 1
+        current_user.otp_secret = secret
+        current_user.save()
+        rds().delete(f"tornium:otp_secret:{current_user.tid}")
+        return make_exception_response("0001")
+    else:
+        return make_exception_response("0000", details={"message": "Invalid TOTP code"})
 
 
 @mod.route("/totp/backup", methods=["POST"])
@@ -694,17 +735,35 @@ def totp_backup_regen(*args, **kwargs):
 @fresh_login_required
 @token_required(setnx=False)
 def set_security_mode(*args, **kwargs):
-    data = json.loads(request.get_data().decode("utf-8"))
-    mode = data.get("mode")
-    otp_generated = False
-
-    if current_user.otp_secret is None or current_user.otp_secret == "":  # nosec B105
-        current_user.generate_otp_secret()
-        otp_generated = True
-
-    if mode not in (0, 1):
-        return make_exception_response("1000", details={"message": "Invalid security mode"})
-
-    User.update(security=mode).where(User.tid == current_user.tid).execute()
-
-    return make_exception_response("0001", details={"otp_generated": otp_generated})
+    try:
+        data = json.loads(request.get_data().decode("utf-8"))
+        mode = data.get("mode")
+        
+        if mode not in (0, 1):
+            return make_exception_response("0000", details={"message": "Invalid security mode. Must be 0 or 1."})
+        
+        # If the mode is told to be 0 (meaning no security), reset the user's security settings
+        if mode == 0:
+            current_user.security = 0
+            current_user.otp_secret = ""
+            current_user.otp_backups = []
+            current_user.save()
+            rds().delete(f"tornium:otp_secret:{current_user.tid}")
+            
+        return make_exception_response("0001", details={
+            "mode": getattr(current_user, "security", None)
+        })
+    except json.JSONDecodeError:
+        return make_exception_response("0001", details={
+            "mode": getattr(current_user, "security", None)
+        })
+    except Exception as e:
+        return make_exception_response("0000", details={"message": f"Failed to set security mode"})
+    
+@mod.route("/security", methods=["GET"])
+@fresh_login_required
+@token_required(setnx=False)
+def get_security_mode(*args, **kwargs):
+    return make_exception_response("0001", details={
+        "mode": getattr(current_user, "security", None)
+    })

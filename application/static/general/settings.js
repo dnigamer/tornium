@@ -76,30 +76,25 @@ $(document).ready(function () {
         xhttp.onload = function () {
             let response = xhttp.response;
 
-            if (response.code == 1) {
-                $("#disable-mfa").attr("disabled", false);
-                $("#enable-totp").attr("disabled", true);
-
-                if (response.details.otp_generated === true) {
-                    showTOTP();
-                }
-            } else if ("code" in response) {
-                generateToast("Security Mode Switch Failed", response["message"]);
+            if (response.details.mode === 0) {
+                $("#disable-mfa").attr("disabled", true);
+                $("#enable-totp").attr("disabled", false);
+                showTOTPVerify();
+            } else if (response.details.mode === 1) {
+                $("#disable-mfa").attr("disabled", true);
+                $("#enable-totp").attr("disabled", false);
                 window.location.reload();
             }
         };
 
         xhttp.responseType = "json";
-        xhttp.open("POST", `/security?token=${token}`);
+        xhttp.open("GET", `/security?token=${token}`);
         xhttp.setRequestHeader("Content-Type", "application/json");
-        xhttp.send(
-            JSON.stringify({
-                mode: 1,
-            }),
-        );
+        xhttp.send();
     });
 
-    // TOTP QR code
+    // TOTP QR code (no verification needed)
+    // This function is used to show the TOTP QR code after the user has already set up TOTP.
     function showTOTP() {
         if (token === null) {
             generateToast("Permission Denied", "Invalid token", "Error");
@@ -118,24 +113,41 @@ $(document).ready(function () {
 
             $("#settings-modal-label").text("TOTP QR Code");
             $("#settings-modal-body").empty();
-            $("#settings-modal-body").append(
-                $("<p>", {
-                    text: "You can set up Tornium to use any TOTP provider such as Google Authenticator and Duo Mobile. To set up TOTP, scan the below QR code in an authenticator and follow the provided instructions.",
-                }),
-            );
+
+            // Instructions
             $("#settings-modal-body").append(
                 $("<div>", {
-                    id: "qr-code-container",
-                    class: "d-flex flex-column justify-content-center mx-2",
-                }),
+                    class: "alert alert-info mb-3",
+                    html: `
+                    <strong>Set up Two-Factor Authentication (TOTP)</strong><br>
+                    Scan the QR code below with your authenticator app (e.g., Google Authenticator, Duo Mobile).<br>
+                    Alternatively, enter the secret key manually.
+                    `
+                })
             );
 
-            new QRCode(document.getElementById("qr-code-container"), response["url"]);
+            // QR Code container
+            const qrRow = $("<div>", { class: "d-flex justify-content-center mb-3" });
+            const qrCol = $("<div>", { id: "qr-code-container", class: "p-3 border rounded bg-light" });
+            qrRow.append(qrCol);
+            $("#settings-modal-body").append(qrRow);
 
+            // Generate QR code
+            new QRCode(document.getElementById("qr-code-container"), {
+                text: response["url"],
+                width: 180,
+                height: 180
+            });
+
+            // Secret key display
             $("#settings-modal-body").append(
-                $("<p>", {
-                    text: `You can also set up TOTP by manually entering the code into the authenticator app: ${response["secret"]}.`,
-                }),
+                $("<div>", {
+                    class: "mb-3 text-center",
+                    html: `
+                    <span class="fw-semibold">Manual Entry Code:</span>
+                    <span class="badge bg-secondary ms-2" style="font-size:1.1em; letter-spacing:2px;">${response["secret"]}</span>
+                    `
+                })
             );
 
             let modal = new bootstrap.Modal($("#settings-modal"));
@@ -147,7 +159,134 @@ $(document).ready(function () {
         xhttp.setRequestHeader("Content-Type", "application/json");
         xhttp.send();
     }
+
+    // TOTP QR code with verification
+    // This function is used to show the TOTP QR code and allow the user to verify it.
+    function showTOTPVerify() {
+        if (token === null) {
+            generateToast("Permission Denied", "Invalid token", "Error");
+            return;
+        }
+
+        let xhttp = new XMLHttpRequest();
+
+        xhttp.onload = function () {
+            let response = xhttp.response;
+
+            $("#settings-modal-label").text("TOTP QR Code");
+            $("#settings-modal-body").empty();
+
+            // Instructions
+            $("#settings-modal-body").append(
+            $("<div>", {
+                class: "alert alert-info mb-3",
+                html: `
+                <strong>Set up Two-Factor Authentication (TOTP)</strong><br>
+                Scan the QR code below with your authenticator app (e.g., Google Authenticator, Duo Mobile).<br>
+                Alternatively, enter the secret key manually.
+                `
+            })
+            );
+
+            // QR Code container
+            const qrRow = $("<div>", { class: "d-flex justify-content-center mb-3" });
+            const qrCol = $("<div>", { id: "qr-code-container", class: "p-3 border rounded bg-light" });
+            qrRow.append(qrCol);
+            $("#settings-modal-body").append(qrRow);
+
+            // Generate QR code
+            new QRCode(document.getElementById("qr-code-container"), {
+                text: response.details["url"],
+                width: 180,
+                height: 180
+            });
+
+            // Secret key display
+            $("#settings-modal-body").append(
+                $("<div>", {
+                    class: "mb-3 text-center",
+                    html: `
+                    <span class="fw-semibold">Manual Entry Code:</span>
+                    <span class="badge bg-secondary ms-2" style="font-size:1.1em; letter-spacing:2px;">${response.details["secret"]}</span>
+                    `
+                })
+            );
+
+            // Verify code input
+            $("#settings-modal-body").append(
+                $("<div>", {
+                    class: "mb-3",
+                    html: `
+                    <label for="totp-code" class="form-label">Enter TOTP Code</label>
+                    <input type="text" class="form-control text-center" id="totp-code" placeholder="123456" maxlength="6" style="font-size:1.25em; letter-spacing:4px;">
+                    `
+                })
+            );
+            $("#settings-modal-body").append(
+                $("<div>", { class: "d-flex justify-content-end gap-2" }).append(
+                    $("<button>", {
+                        class: "btn btn-danger px-4",
+                        id: "cancel-totp-verify",
+                        type: "button",
+                        text: "Cancel",
+                        "data-bs-dismiss": "modal"
+                    }),
+                    $("<button>", {
+                        class: "btn btn-success px-4",
+                        id: "verify-totp-code",
+                        type: "button",
+                        text: "Verify"
+                    })
+                )
+            );
+
+            let modal = new bootstrap.Modal($("#settings-modal"));
+            modal.show();
+        };
+
+        xhttp.responseType = "json";
+        xhttp.open("POST", `/totp/secret?token=${token}`);
+        xhttp.setRequestHeader("Content-Type", "application/json");
+        xhttp.send();
+    }
+
     $("#show-totp-qr").on("click", showTOTP);
+
+    $(document).on("click", "#verify-totp-code", function () {
+        if (token === null) {
+            generateToast("Permission Denied", "Invalid token", "Error");
+            return;
+        }
+
+        const code = $("#totp-code").val().trim();
+        if (code.length !== 6 || isNaN(code)) {
+            generateToast("Invalid TOTP Code", "Please enter a valid 6-digit TOTP code.", "Error");
+            return;
+        }
+
+        let xhttp = new XMLHttpRequest();
+        xhttp.onload = function () {
+            let response = xhttp.response;
+            
+            if (response.code === 0) {
+                generateToast("TOTP Verification Failed", response.details["message"], "Error");
+                return;
+            }
+
+            generateToast("TOTP Verification Successful", "Your TOTP has been successfully set up.");
+            $("#disable-mfa").attr("disabled", true);
+            $("#enable-totp").attr("disabled", false);
+
+            let modal = bootstrap.Modal.getInstance($("#settings-modal"));
+            modal.hide();
+            window.location.reload();
+        };
+        
+        xhttp.responseType = "json";
+        xhttp.open("POST", `/totp/verify?token=${token}`);
+        xhttp.setRequestHeader("Content-Type", "application/json");
+        xhttp.send(JSON.stringify({ totp_code: code }));
+    });
 
     // TOTP Regenerate Secret
     $("#regen-totp-secret").on("click", function () {
@@ -155,26 +294,7 @@ $(document).ready(function () {
             generateToast("Permission Denied", "Invalid token", "Error");
             return;
         }
-
-        let xhttp = new XMLHttpRequest();
-        xhttp.onload = function () {
-            let response = xhttp.response;
-
-            if ("code" in response && response["code"] !== 1) {
-                generateToast("TOTP Secret Generation Failed", response["message"]);
-            } else {
-                generateToast(
-                    "TOTP Secret Generation Successful",
-                    "The TOTP secret was successfully generated. To add the secret to your authenticator app, " +
-                        'press the "Show TOTP QR Code" button.',
-                );
-            }
-        };
-
-        xhttp.responseType = "json";
-        xhttp.open("POST", `/totp/secret?token=${token}`);
-        xhttp.setRequestHeader("Content-Type", "application/json");
-        xhttp.send();
+        showTOTPVerify();
     });
 
     // TOTP Regenerate Backup Codes
@@ -195,49 +315,56 @@ $(document).ready(function () {
 
             $("#settings-modal-label").text("TOTP Backup Codes");
             $("#settings-modal-body").empty();
+
+            // Info alert
             $("#settings-modal-body").append(
-                $("<p>", {
-                    text:
-                        "TOTP backup codes are to be used in case your primary authenticator is missing or damaged. " +
-                        "Once generated, backup codes are hashed and can never be viewed again so be sure to save them. " +
-                        "Once a backup code is used, it is permanently deleted.",
-                }),
-            );
-            $("#settings-modal-body").append(
-                $("<ul>", {
-                    class: "list-group mb-2",
-                    id: "totp-backup-container",
-                }),
+                $("<div>", {
+                    class: "alert alert-info mb-3",
+                    html:
+                        "<strong>Important:</strong> TOTP backup codes are for use if your primary authenticator is unavailable. " +
+                        "These codes are shown only once. Save them securely. Each code can be used only once."
+                })
             );
 
+            // Codes list in a card
+            const codesCard = $("<div>", { class: "card mb-3 shadow-sm" });
+            codesCard.append(
+                $("<div>", { class: "card-header fw-semibold", text: "Your Backup Codes" })
+            );
+            const codesList = $("<ul>", {
+                class: "list-group list-group-flush text-center fs-5",
+                id: "totp-backup-container"
+            });
             $.each(response["codes"], function (index, code) {
-                $("#totp-backup-container").append(
+                codesList.append(
                     $("<li>", {
-                        class: "list-group-item",
-                        text: code,
-                    }),
+                        class: "list-group-item py-2",
+                        text: code
+                    })
                 );
             });
+            codesCard.append(codesList);
+            $("#settings-modal-body").append(codesCard);
 
-            $("#settings-modal-body").append(
+            // Action buttons
+            const btnGroup = $("<div>", { class: "d-flex justify-content-end gap-2" });
+            btnGroup.append(
                 $("<button>", {
-                    class: "btn btn-outline-success m-1",
+                    class: "btn btn-outline-success",
                     id: "copy-totp-backup",
                     type: "button",
-                    text: "Copy",
+                    html: '<i class="bi bi-clipboard"></i> Copy'
                 }),
-            );
-
-            $("#settings-modal-body").append(
                 $("<button>", {
-                    class: "btn btn-outline-success m-1",
+                    class: "btn btn-outline-primary",
                     id: "save-totp-backup",
                     type: "button",
-                    text: "Save as File",
-                }),
+                    html: '<i class="bi bi-download"></i> Save as File'
+                })
             );
-            $("#save-totp-backup").attr("disabled", true);
+            $("#settings-modal-body").append(btnGroup);
 
+            // Clipboard and file save functionality
             $("#copy-totp-backup").on("click", function () {
                 navigator.clipboard.writeText(response["codes"].join("\n")).then(function () {
                     generateToast("Codes Copied", "The TOTP backup codes have been copied to your clipboard");
@@ -245,7 +372,16 @@ $(document).ready(function () {
             });
 
             $("#save-totp-backup").on("click", function () {
-                window.open("data:text/plain;charset=utf-8," + response["codes"].join("\n"));
+                const blob = new Blob([response["codes"].join("\n")], { type: "text/plain;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "tornium-totp-backup-codes.txt";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                generateToast("Codes Saved", "The TOTP backup codes have been saved as a file.");
             });
 
             let modal = new bootstrap.Modal($("#settings-modal"));
@@ -267,11 +403,7 @@ $(document).ready(function () {
         );
     }
 
-    $("#api-key-input").on("keypress", function (e) {
-        if (e.which === 13) {
-            addNewKey();
-        }
-    });
+    $("#api-key-input").on("keypress", e => e.which === 13 && addNewKey());
     $("#submit-new-key").on("click", addNewKey);
 
     $(".disable-key").on("click", function () {
@@ -296,6 +428,7 @@ $(document).ready(function () {
         tfetch("DELETE", `key/${$(this).attr("data-key-guid")}`, { errorTitle: "API Key Delete Failed" }).then(() => {
             generateToast("API Key Delete Successful");
             $(this).closest(".key-parent").remove();
+            //$button.closest(".row, .key-parent, .d-flex").remove(); - should be this
         });
     });
 });
